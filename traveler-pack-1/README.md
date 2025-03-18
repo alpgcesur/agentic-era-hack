@@ -1,4 +1,4 @@
-# my-agent1
+# traveler-pack-1
 
 A agent implementing a base ReAct agent using LangGraph
 
@@ -9,7 +9,7 @@ Agent generated with [`googleCloudPlatform/agent-starter-pack`](https://github.c
 This project is organized as follows:
 
 ```
-my-agent1/
+traveler-pack-1/
 ├── app/                 # Core application code
 │   ├── agent.py         # Main agent logic
 │   ├── agent_engine_app.py # Agent Engine application logic

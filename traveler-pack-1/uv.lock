@@ -1938,7 +1938,7 @@ wheels = [
 ]
 
 [[package]]
-name = "my-agent1"
+name = "traveler-pack-1"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

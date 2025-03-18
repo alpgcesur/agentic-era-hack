@@ -63,7 +63,7 @@ class AgentEngineApp:
         # Initialize Telemetry
         try:
             Traceloop.init(
-                app_name="my-agent1",
+                app_name="traveler-pack-1",
                 disable_batch=False,
                 exporter=CloudTraceLoggingSpanExporter(project_id=self.project_id),
                 instruments={Instruments.LANGCHAIN, Instruments.CREW},
@@ -219,7 +219,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--agent-name",
-        default="my-agent1",
+        default="traveler-pack-1",
         help="Name for the agent engine",
     )
     parser.add_argument(

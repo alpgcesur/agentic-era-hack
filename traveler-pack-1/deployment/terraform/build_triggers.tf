@@ -21,7 +21,7 @@ resource "google_cloudbuild_trigger" "pr_checks" {
   service_account = resource.google_service_account.cicd_runner_sa.id
 
   repository_event_config {
-    repository = google_cloudbuildv2_repository.repo.id
+    repository = "projects/${var.cicd_runner_project_id}/locations/${var.region}/connections/${var.host_connection_name}/repositories/${var.repository_name}"
     pull_request {
       branch = "main"
     }
@@ -35,7 +35,7 @@ resource "google_cloudbuild_trigger" "pr_checks" {
     "deployment/**",
     "uv.lock",
   ]
-  depends_on = [resource.google_project_service.cicd_services, resource.google_project_service.shared_services, google_cloudbuildv2_repository.repo]
+  depends_on = [resource.google_project_service.cicd_services, resource.google_project_service.shared_services]
 }
 
 # b. Create CD pipeline trigger
@@ -47,7 +47,7 @@ resource "google_cloudbuild_trigger" "cd_pipeline" {
   description     = "Trigger for CD pipeline"
 
   repository_event_config {
-    repository = google_cloudbuildv2_repository.repo.id
+    repository = "projects/${var.cicd_runner_project_id}/locations/${var.region}/connections/${var.host_connection_name}/repositories/${var.repository_name}"
     push {
       branch = "main"
     }
@@ -67,7 +67,7 @@ resource "google_cloudbuild_trigger" "cd_pipeline" {
     _REGION                        = var.region
     # Your other CD Pipeline substitutions
   }
-  depends_on = [resource.google_project_service.cicd_services, resource.google_project_service.shared_services, google_cloudbuildv2_repository.repo]
+  depends_on = [resource.google_project_service.cicd_services, resource.google_project_service.shared_services]
 
 }
 
@@ -79,7 +79,7 @@ resource "google_cloudbuild_trigger" "deploy_to_prod_pipeline" {
   description     = "Trigger for deployment to production"
   service_account = resource.google_service_account.cicd_runner_sa.id
   repository_event_config {
-    repository = google_cloudbuildv2_repository.repo.id
+    repository = "projects/${var.cicd_runner_project_id}/locations/${var.region}/connections/${var.host_connection_name}/repositories/${var.repository_name}"
   }
   filename = "deployment/cd/deploy-to-prod.yaml"
   approval_config {
@@ -90,6 +90,6 @@ resource "google_cloudbuild_trigger" "deploy_to_prod_pipeline" {
     _REGION                      = var.region
     # Your other Deploy to Prod Pipeline substitutions
   }
-  depends_on = [resource.google_project_service.cicd_services, resource.google_project_service.shared_services, google_cloudbuildv2_repository.repo]
+  depends_on = [resource.google_project_service.cicd_services, resource.google_project_service.shared_services]
 
 }
