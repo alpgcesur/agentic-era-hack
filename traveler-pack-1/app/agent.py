@@ -1,340 +1,411 @@
 import os
 import requests
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from typing import Annotated, List, TypedDict, Dict, Any, Optional
+import operator
+from pydantic import BaseModel, Field
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langchain_google_vertexai import ChatVertexAI
-from langgraph.graph import END, MessagesState, StateGraph
-from langgraph.prebuilt import ToolNode
-from IPython.display import Image, display
-from typing import TypedDict, List, Optional
+from langgraph.graph import END, START, StateGraph
+from langgraph.constants import Send
 
-class CustomMessagesState(TypedDict):
-    messages: List[BaseMessage]
-    decision: Optional[str]
-
-# Set up API keys from environment variables
-GOOGLE_CUSTOM_SEARCH_API_KEY = os.environ.get("AIzaSyCr3eLaGhFEz4-cjQsfUbylM3kleQoX2uo")
-GOOGLE_CUSTOM_SEARCH_ENGINE_ID = os.environ.get("e57c12194a2c34e10")
-GOOGLE_PLACES_API_KEY = os.environ.get("AIzaSyCpAS9Rarl_7nUoU1nG47iPOGzFCcB4Lks")
-GOOGLE_MAPS_API_KEY = os.environ.get("AIzaSyCpAS9Rarl_7nUoU1nG47iPOGzFCcB4Lks")
-OPENWEATHER_API_KEY = os.environ.get("OPENWEATHER_API_KEY")
-
-# Constants for the services
 LOCATION = "us-central1"
 LLM = "gemini-2.0-flash-001"
 
-# 1. Define Tools using external APIs
+# API keys
+GOOGLE_PLACES_API_KEY = os.environ.get("GOOGLE_PLACES_API_KEY", "AIzaSyCpAS9Rarl_7nUoU1nG47iPOGzFCcB4Lks")
 
-@tool
-def search_web(query: str) -> str:
-    """
-    Performs a web search using the Google Custom Search API.
-    API Documentation: https://developers.google.com/custom-search/v1/overview
-    Set the environment variables GOOGLE_CUSTOM_SEARCH_API_KEY and GOOGLE_CUSTOM_SEARCH_ENGINE_ID.
-    """
-    if not GOOGLE_CUSTOM_SEARCH_API_KEY or not GOOGLE_CUSTOM_SEARCH_ENGINE_ID:
-        return "Google Custom Search API key or Search Engine ID is not set."
-    
-    url = "https://www.googleapis.com/customsearch/v1"
-    params = {
-        "key": GOOGLE_CUSTOM_SEARCH_API_KEY,
-        "cx": GOOGLE_CUSTOM_SEARCH_ENGINE_ID,
-        "q": query
-    }
-    response = requests.get(url, params=params)
-    if response.status_code == 200:
-        results = response.json()
-        # Return top 3 search results (titles and snippets)
-        items = results.get("items", [])[:3]
-        output = "\n".join([f"{item['title']}: {item['snippet']}" for item in items])
-        return output if output else "No results found."
+# Define valid place types for API calls
+VALID_PLACE_TYPES = [
+    'tourist_attraction', 'bank', 'bar', 'car_rental', 'electric_vehicle_charging_station', 
+    'gas_station', 'parking', 'art_gallery', 'cultural_landmark', 'historical_place', 
+    'monument', 'museum', 'performing_arts_theater', 'amusement_park', 'aquarium', 
+    'botanical_garden', 'dog_park', 'historical_landmark', 'night_club', 'zoo', 
+    'atm', 'coffee_shop', 'bed_and_breakfast', 'hotel', 'church', 'clothing_store', 
+    'department_store', 'gift_shop', 'market', 'restaurant', 'cafe'
+]
+
+# 1. Define tools for travel information
+def search_weather(location: str) -> str:
+    """Search for weather information in a specific location"""
+    # Simplified mock response - will replace with actual API call later
+    if "san francisco" in location.lower() or "sf" in location.lower():
+        return "It's 60 degrees and foggy in San Francisco."
+    elif "new york" in location.lower() or "nyc" in location.lower():
+        return "It's 75 degrees and partly cloudy in New York City."
     else:
-        return f"Error during web search: {response.status_code}"
+        return f"The weather in {location} is sunny and 72 degrees."
 
-@tool
-def get_places(query: str) -> str:
-    """
-    Retrieves place information using the Google Places API.
-    API Documentation: https://developers.google.com/places/web-service/overview
-    Set the environment variable GOOGLE_PLACES_API_KEY.
-    """
-    if not GOOGLE_PLACES_API_KEY:
-        return "Google Places API key is not set."
-    
-    url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
-    params = {
-        "key": GOOGLE_PLACES_API_KEY,
-        "query": query
-    }
-    response = requests.get(url, params=params)
-    if response.status_code == 200:
-        results = response.json()
-        places = results.get("results", [])[:3]
-        output = "\n".join([f"{place.get('name')}: {place.get('formatted_address')}" for place in places])
-        return output if output else "No places found."
-    else:
-        return f"Error retrieving places: {response.status_code}"
-
-@tool
-def get_directions(query: str) -> str:
-    """
-    Provides directions using the Google Maps Directions API.
-    API Documentation: https://developers.google.com/maps/documentation/directions/overview
-    Set the environment variable GOOGLE_MAPS_API_KEY.
-    Note: Query should be in the format "origin: <origin> destination: <destination>"
-    """
-    if not GOOGLE_MAPS_API_KEY:
-        return "Google Maps API key is not set."
-    
-    # Simple parsing: extract origin and destination from the query
+def search_places(location: str, place_type: str) -> Dict:
+    """Search for places in a specific location using Google Places API"""
     try:
-        parts = query.split("destination:")
-        origin_part = parts[0].replace("origin:", "").strip()
-        destination_part = parts[1].strip()
-    except Exception:
-        return "Invalid query format. Use 'origin: <origin> destination: <destination>'."
-    
-    url = "https://maps.googleapis.com/maps/api/directions/json"
-    params = {
-        "key": GOOGLE_MAPS_API_KEY,
-        "origin": origin_part,
-        "destination": destination_part,
-    }
-    response = requests.get(url, params=params)
-    if response.status_code == 200:
+        # Format the search query for attractions in the specified location
+        query = f"{place_type} in {location}"
+        
+        # Call the Google Places API Text Search endpoint
+        url = "https://places.googleapis.com/v1/places:searchText"
+        params = {
+            "textQuery": query,
+            "key": GOOGLE_PLACES_API_KEY,
+            "includedType": place_type,
+            "fields": "places.displayName,places.formattedAddress,places.priceLevel,places.priceRange,places.rating,places.userRatingCount,places.currentOpeningHours,places.location,places.accessibilityOptions"
+        }
+
+        response = requests.post(url, params=params)
         data = response.json()
-        routes = data.get("routes", [])
-        if routes:
-            leg = routes[0]["legs"][0]
-            steps = leg["steps"]
-            # Clean HTML from directions and join steps with arrows
-            directions = " -> ".join(
-                [step["html_instructions"].replace("<b>", "").replace("</b>", "") for step in steps]
-            )
-            return directions
-        else:
-            return "No directions found."
-    else:
-        return f"Error retrieving directions: {response.status_code}"
-
-@tool
-def get_weather(query: str) -> str:
-    """
-    Retrieves current weather data using the OpenWeatherMap API.
-    API Documentation: https://openweathermap.org/api
-    Set the environment variable OPENWEATHER_API_KEY.
-    Note: Query should contain the city name.
-    """
-    if not OPENWEATHER_API_KEY:
-        return "OpenWeatherMap API key is not set."
+        
+        # Check if the API call was successful
+        if response.status_code != 200:
+            return {
+                "success": False,
+                "error": f"API error: {str(data)}",
+                "places": []
+            }
+        
+        # Extract and format place information
+        places_data = []
+        results = data.get("places", [])
+        
+        if not results:
+            return {
+                "success": True,
+                "places": [],
+                "message": f"No {place_type} found in {location}."
+            }
+        
+        # Process up to 5 places
+        for place in results[:5]:
+            place_data = {}
+            
+            # Get name (handle possible none or missing text attribute)
+            display_name = place.get("displayName", {})
+            if isinstance(display_name, dict) and "text" in display_name:
+                place_data["name"] = display_name["text"]
+            else:
+                place_data["name"] = "Unknown place"
+                
+            place_data["rating"] = place.get("rating", "No rating")
+            place_data["reviews"] = place.get("userRatingCount", 0)
+            place_data["address"] = place.get("formattedAddress", "No address available")
+            
+            # Handle price level if available
+            if "priceLevel" in place:
+                place_data["price_level"] = place["priceLevel"]
+            
+            places_data.append(place_data)
+        print(str(places_data))
+        return {
+            "success": True,
+            "places": places_data,
+            "place_type": place_type,
+            "location": location,
+            "count": len(places_data)
+        }
     
-    url = "https://api.openweathermap.org/data/2.5/weather"
-    params = {
-        "q": query,
-        "appid": OPENWEATHER_API_KEY,
-        "units": "metric"
-    }
-    response = requests.get(url, params=params)
-    if response.status_code == 200:
-        data = response.json()
-        weather_desc = data["weather"][0]["description"]
-        temp = data["main"]["temp"]
-        return f"The weather in {query} is {weather_desc} with a temperature of {temp}°C."
-    else:
-        return f"Error retrieving weather data: {response.status_code}"
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "places": [],
+            "place_type": place_type,
+            "location": location
+        }
 
-# List all tools to bind with the LLM
-tools = [search_web, get_places, get_directions, get_weather]
-
-# 2. Set up the language model and bind tools
+# 2. Set up the language model
 llm = ChatVertexAI(
-    model=LLM, location=LOCATION, temperature=0, max_tokens=1024, streaming=True
-).bind_tools(tools)
+    model=LLM,
+    location=LOCATION,
+    temperature=0.2,
+    max_tokens=1024,
+    streaming=True
+)
 
-# 3. Define the Router and Sub-Agent Nodes
+# Define schema for worker tasks
+class WorkerTask(BaseModel):
+    worker_id: str = Field(
+        description="Unique identifier for the worker to execute this task",
+    )
+    action: str = Field(
+        description="Specific action for the worker to perform",
+    )
+    location: str = Field(
+        description="The location to get information about",
+    )
+    parameters: Dict[str, Any] = Field(
+        default={},
+        description="Additional parameters required for the task",
+    )
+    priority: int = Field(
+        default=1,
+        description="Priority of task (1=highest, 3=lowest)",
+    )
 
-# Update call_router to return both the messages and the decision
-def call_router(state: CustomMessagesState) -> dict:
-    """
-    Uses LLM reasoning to determine which sub-agent to call next based on the message content.
-    """
-    last_message = state["messages"][-1]
+class TravelPlan(BaseModel):
+    destination: str = Field(
+        description="The main destination the user is interested in",
+    )
+    visit_purpose: Optional[str] = Field(
+        default="tourism",
+        description="The purpose of the visit (tourism, business, food tour, etc.)",
+    )
+    tasks: List[WorkerTask] = Field(
+        description="List of tasks for workers to execute",
+    )
+
+# Augment the LLM with schema for structured output
+planner = llm.with_structured_output(TravelPlan)
+
+# Define state schema for our traveler agent
+class TravelState(TypedDict):
+    messages: List[BaseMessage]  # Conversation messages
+    destination: str  # Main destination 
+    visit_purpose: str  # Purpose of visit
+    tasks: List[WorkerTask]  # Tasks identified by orchestrator
+    completed_tasks: Annotated[List[Dict], operator.add]  # Results from workers
+    final_response: str  # Final synthesized response
+
+# Define worker state schema
+class WorkerState(TypedDict):
+    worker_id: str  # Worker identifier
+    action: str  # Action to perform
+    location: str  # Location to search
+    parameters: Dict[str, Any]  # Additional parameters
+    completed_tasks: Annotated[List[Dict], operator.add]  # Worker results
+    priority: int  # Task priority
+
+# 3. Define workflow components - Orchestrator-Worker pattern
+
+def orchestrator(state: TravelState) -> dict:
+    """Analyze user request and create a comprehensive travel plan with worker tasks"""
+    # Get the last user message
+    messages = state.get("messages", [])
+    user_messages = [m for m in messages if isinstance(m, HumanMessage)]
     
-    # Only route if the last message is from the human
-    if not isinstance(last_message, HumanMessage):
-        print("Last message is from AI. Exiting")
-        return {"messages": state["messages"], "decision": "END"}
+    if not user_messages:
+        return {"final_response": "No query provided"}
     
-    # Extract message text
-    message_content = last_message.content
-    if isinstance(message_content, list):
-        # Handle structured content
-        message_text = " ".join([item.get('text', '') for item in message_content 
-                               if isinstance(item, dict) and item.get('type') == 'text'])
-    else:
-        # Handle string content
-        message_text = str(message_content)
+    last_message = user_messages[-1]
     
-    # Use the LLM to determine routing
-    system_prompt = """You are a routing assistant that determines which specialized agent should handle a user query.
-    Analyze the user's message and select ONE of the following agents:
-    - "weather_node": For questions about weather conditions or forecasts
-    - "places_node": For questions about restaurants, attractions, or points of interest
-    - "maps_node": For questions about directions, navigation, or travel routes
-    - "web_search_node": For general information queries that require web search
-    - "END": If the query doesn't clearly match any of the above categories
-    
-    Return ONLY the agent name without any explanation or additional text."""
-    
-    router_llm = ChatVertexAI(
-        model="gemini-2.0-flash-001", 
-        location=LOCATION, 
-        temperature=0,
-        max_tokens=5
+    # Use planner to create a structured travel plan with worker assignments
+    travel_plan = planner.invoke(
+        [
+            SystemMessage(content=f"""You are an AI travel planning expert who analyzes user queries and creates detailed travel plans.
+
+            Your job is to:
+            1. Identify the location(s) the user is interested in
+            2. Understand the purpose of their visit
+            3. Create a list of specific worker tasks to gather relevant information
+            
+            AVAILABLE WORKERS AND THEIR CAPABILITIES:
+            
+            1. "weather_worker":
+               - action: "get_weather"
+               - Provides weather information for a location
+            
+            2. "places_worker":
+               - action: "search_places"
+               - Searches for places by type in a location
+               - Returns minimum of 5 places
+               - Required parameters:
+                 * place_type: The type of places to search for
+                 * Valid types include: {VALID_PLACE_TYPES}
+            
+            For each task, you must specify:
+            1. worker_id: Which worker should handle this task
+            2. action: What action the worker should perform
+            3. location: The relevant location
+            4. parameters: Any additional parameters needed (like place_type=restaurant)
+            5. priority: How important this task is (1=highest, 3=lowest)
+            
+            Be comprehensive and consider all aspects of the user's query.
+            
+            Below are the sections that should be included in the travel guide:
+            1. 📍 WELCOME TO [DESTINATION] - An enthusiastic, personalized introduction
+            2. 🌤️ WEATHER & WHEN TO VISIT - Current conditions and practical advice
+            3. 🏛️ TOP ATTRACTIONS - Must-see places with brief descriptions
+            4. 🍽️ DINING RECOMMENDATIONS - Where to eat based on available information
+            5. 💡 INSIDER TIPS - Helpful advice for the visitor
+            6. 🚶 SUGGESTED ITINERARY - A brief outline for their visit
+
+            When creating tasks, make sure to include all the sections in the travel guide.
+            If the user asks about a specific place type, create a task for places_worker with that type.
+            Always include weather information unless clearly irrelevant.
+            Try to include as many places as possible.
+            If the query is general, include tasks for important tourist attractions.
+            """),
+            HumanMessage(content=f"User query: {last_message.content}")
+        ]
     )
     
-    # Get routing decision from LLM
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=f"Route this query: {message_text}")
-    ]
-    
-    response = router_llm.invoke(messages)
-    routing_decision = response.content.strip()
-    
-    # Validate the routing decision
-    valid_routes = ["weather_node", "places_node", "maps_node", "web_search_node", "END"]
-    if routing_decision in valid_routes:
-        return {"messages": state["messages"], "decision": routing_decision}
-    else:
-        # Default to web search if the LLM returns an invalid route
-        return {"messages": state["messages"], "decision": "web_search_node"}
+    return {
+        "destination": travel_plan.destination,
+        "visit_purpose": travel_plan.visit_purpose,
+        "tasks": travel_plan.tasks
+    }
 
+def weather_worker(state: WorkerState) -> dict:
+    """Worker that retrieves weather information"""
+    location = state.get("location", "")
+    priority = state.get("priority", 1)
+    
+    weather_info = search_weather(location)
+    
+    result = {
+        "worker_id": "weather_worker",
+        "action": "get_weather",
+        "location": location,
+        "priority": priority,
+        "data": weather_info,
+        "data_type": "weather"
+    }
+    
+    return {"completed_tasks": [result]}
 
-# Update route_next to correctly handle the state
-def route_next(state: CustomMessagesState) -> str:
+def places_worker(state: WorkerState) -> dict:
+    """Worker that searches for places by type"""
+    location = state.get("location", "")
+    parameters = state.get("parameters", {})
+    priority = state.get("priority", 1)
+    
+    place_type = parameters.get("place_type", "tourist_attraction")
+    # Validate place type
+    if place_type not in VALID_PLACE_TYPES:
+        place_type = "tourist_attraction"
+    
+    places_data = search_places(location, place_type)
+    
+    result = {
+        "worker_id": "places_worker",
+        "action": "search_places",
+        "location": location,
+        "place_type": place_type,
+        "priority": priority,
+        "data": places_data,
+        "data_type": "places"
+    }
+    
+    return {"completed_tasks": [result]}
+
+def synthesizer(state: TravelState) -> dict:
+    """Create an engaging, well-formatted travel guide from worker results"""
+    destination = state.get("destination", "your destination")
+    visit_purpose = state.get("visit_purpose", "your trip")
+    results = state.get("completed_tasks", [])
+    
+    if not results:
+        return {"final_response": f"I'm sorry, I couldn't find information about {destination}."}
+    
+    # Prepare all results data for the LLM
+    synthesizer_prompt = f"""
+    Create an engaging, personalized travel guide for {destination}. The user is planning a {visit_purpose}.
+    
+    Use the following information to create your guide:
+    
+    DESTINATION: {destination}
+    VISIT PURPOSE: {visit_purpose}
+    
+    GATHERED INFORMATION:
     """
-    Routes to the next node based on the decision.
-    """
-    return state["decision"]
+    
+    # Add all worker results to the prompt
+    for result in results:
+        worker_id = result.get("worker_id", "unknown")
+        action = result.get("action", "unknown")
+        data_type = result.get("data_type", "unknown")
+        data = result.get("data", {})
+        
+        synthesizer_prompt += f"\n--- {data_type.upper()} INFORMATION ---\n"
+        synthesizer_prompt += f"Data: {data}\n"
+    
+    # Generate the final response using the LLM
+    response = llm.invoke([
+        SystemMessage(content="""You are an expert travel assistant creating personalized travel guides.
+        
+        Create a beautifully formatted travel guide with:
+        
+        1. 📍 WELCOME TO [DESTINATION] - An enthusiastic, personalized introduction
+        2. 🌤️ WEATHER & WHEN TO VISIT - Current conditions and practical advice
+        3. 🏛️ TOP ATTRACTIONS - Must-see places with brief descriptions
+        4. 🍽️ DINING RECOMMENDATIONS - Where to eat based on available information
+        5. 💡 INSIDER TIPS - Helpful advice for the visitor
+        6. 🚶 SUGGESTED ITINERARY - A brief outline for their visit
+        
+        Use markdown formatting to make your guide visually appealing:
+        - Use headers (## and ###) for sections
+        - Use emoji icons for visual appeal
+        - Use bullet points for lists
+        - Use **bold** and *italic* for emphasis
+        
+        Make your response conversational and engaging, like advice from a knowledgeable friend.
+        Be specific about places mentioned in the data rather than generic.
+        If information is limited in some areas, focus on what you do have and make it helpful.
+        """),
+        HumanMessage(content=synthesizer_prompt)
+    ])
+    
+    return {"final_response": response.content}
 
-# Update the specialized agent functions to maintain the decision field
-def call_web_search(state: CustomMessagesState, config: RunnableConfig) -> dict:
-    """
-    Sub-agent for handling web search queries.
-    """
-    system_message = """You are a web search agent specializing in travel-related information.
-    
-    IMPORTANT: When a user asks for information that requires searching the web:
-    1. Use the search_web tool to find relevant information
-    2. Analyze the search results
-    3. Provide a helpful summary based on the search results
-    
-    Always use the search_web tool to retrieve up-to-date information for travel questions."""
-    
-    # Convert messages to the format expected by the LLM
-    formatted_messages = [SystemMessage(content=system_message)] + state["messages"]
-    
-    # Invoke the LLM
-    response = llm.invoke(formatted_messages, config)
-    
-    # Return the updated messages state with the original decision
-    return {"messages": state["messages"] + [response], "decision": state["decision"]}
+def handle_message(state: TravelState) -> dict:
+    """Process new user messages and maintain conversation history"""
+    return {}  # Don't return any messages to prevent history duplication
 
+def respond_to_user(state: TravelState) -> dict:
+    """Format the final response as a message to return to the user"""
+    final_response = state.get("final_response", "I'm sorry, I couldn't process your travel query.")
+    
+    return {"final_response": final_response}  # Just return the final response without adding to messages
 
-def call_places(state: CustomMessagesState, config: RunnableConfig) -> dict[str, BaseMessage]:
-    """
-    Sub-agent for providing places recommendations.
-    Instructs the LLM to use the get_places tool when appropriate.
-    """
-    system_message = """You are a places recommendation agent specializing in travel destinations.
+def route_to_worker(state: TravelState):
+    """Dynamically route tasks to appropriate workers based on worker_id"""
+    tasks = state.get("tasks", [])
     
-    IMPORTANT: When a user asks about restaurants, attractions, or places:
-    1. Use the get_places tool to find relevant place information
-    2. Analyze the returned place data
-    3. Provide helpful recommendations based on the places data
+    if not tasks:
+        return "synthesizer"
     
-    Always use the get_places tool to retrieve up-to-date information about locations."""
+    # Create a list of Send operations, one for each task
+    worker_assignments = []
     
-    # Convert messages to the format expected by the LLM
-    formatted_messages = [SystemMessage(content=system_message)] + state["messages"]
+    for task in tasks:
+        worker_id = task.worker_id
+        
+        # Prepare the worker state
+        worker_state = {
+            "worker_id": task.worker_id,
+            "action": task.action,
+            "location": task.location,
+            "parameters": task.parameters,
+            "priority": task.priority
+        }
+        
+        # Route to the appropriate worker based on worker_id
+        if worker_id == "weather_worker":
+            worker_assignments.append(Send("weather_worker", worker_state))
+        elif worker_id == "places_worker":
+            worker_assignments.append(Send("places_worker", worker_state))
     
-    # Invoke the LLM
-    response = llm.invoke(formatted_messages, config)
-    
-    # Return the updated messages state
-    return {"messages": state["messages"] + [response], "decision": state["decision"]}
+    return worker_assignments
 
-def call_maps(state: CustomMessagesState, config: RunnableConfig) -> dict[str, BaseMessage]:
-    """
-    Sub-agent for delivering directions and maps information.
-    Instructs the LLM to use the get_directions tool when appropriate.
-    """
-    system_message = """You are a maps and directions specialist.
-    
-    IMPORTANT: When a user asks for directions or how to get from one place to another:
-    1. Use the get_directions tool to retrieve routing information
-    2. Format the query as 'origin: <origin> destination: <destination>'
-    3. Provide clear step-by-step directions based on the results
-    
-    Always use the get_directions tool to provide accurate navigation guidance."""
-    
-    # Convert messages to the format expected by the LLM
-    formatted_messages = [SystemMessage(content=system_message)] + state["messages"]
-    
-    # Invoke the LLM
-    response = llm.invoke(formatted_messages, config)
-    
-    # Return the updated messages state
-    return {"messages": state["messages"] + [response], "decision": state["decision"]}
+# 4. Create the workflow graph
+workflow = StateGraph(TravelState)
 
-def call_weather(state: CustomMessagesState, config: RunnableConfig) -> dict[str, BaseMessage]:
-    """
-    Sub-agent for providing weather updates.
-    Instructs the LLM to use the get_weather tool when appropriate.
-    """
-    system_message = """You are a weather information specialist.
-    
-    IMPORTANT: When a user asks about weather:
-    1. Use the get_weather tool to retrieve current weather data
-    2. Extract the location from the user's query
-    3. Provide a clear weather summary based on the results
-    
-    Always use the get_weather tool to provide accurate and up-to-date weather information."""
-    
-    # Convert messages to the format expected by the LLM
-    formatted_messages = [SystemMessage(content=system_message)] + state["messages"]
-    
-    # Invoke the LLM
-    response = llm.invoke(formatted_messages, config)
-    
-    # Return the updated messages state
-    return {"messages": state["messages"] + [response], "decision": state["decision"]}
+# Add the nodes
+workflow.add_node("handle_message", handle_message)
+workflow.add_node("orchestrator", orchestrator)
+workflow.add_node("weather_worker", weather_worker)
+workflow.add_node("places_worker", places_worker)
+workflow.add_node("synthesizer", synthesizer)
+workflow.add_node("respond_to_user", respond_to_user)
 
-# 4. Create the workflow graph with the new nodes
-workflow = StateGraph(CustomMessagesState)
+# 5. Define graph edges
+workflow.set_entry_point("handle_message")
+workflow.add_edge("handle_message", "orchestrator")
+workflow.add_conditional_edges("orchestrator", route_to_worker, ["weather_worker", "places_worker", "synthesizer"])
+workflow.add_edge("weather_worker", "synthesizer")
+workflow.add_edge("places_worker", "synthesizer")
+workflow.add_edge("synthesizer", "respond_to_user")
+workflow.add_edge("respond_to_user", END)
 
-# Add our nodes: the router and the specialized sub-agents.
-workflow.add_node("router", call_router)
-workflow.add_node("web_search_node", call_web_search)
-workflow.add_node("places_node", call_places)
-workflow.add_node("maps_node", call_maps)
-workflow.add_node("weather_node", call_weather)
-
-# Optionally add a tools node if you wish to invoke tool calls directly
-#workflow.add_node("tools", ToolNode(tools))
-
-# 5. Define Graph Edges
-workflow.set_entry_point("router")
-workflow.add_conditional_edges("router", route_next)
-workflow.add_edge("web_search_node", "router")
-workflow.add_edge("places_node", "router") 
-workflow.add_edge("maps_node", "router")
-workflow.add_edge("weather_node", "router")
-
-# 6. Compile the Workflow
+# 6. Compile the workflow
 agent = workflow.compile()
 
-# 7. Display the compiled graph image (requires workflow graph support for draw_mermaid_png)
-# display(Image(workflow.get_graph().draw_mermaid_png()))

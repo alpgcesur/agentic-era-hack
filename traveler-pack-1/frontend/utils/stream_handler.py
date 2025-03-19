@@ -255,8 +255,9 @@ class EventProcessor:
 
                     # Handle AI responses
                     elif content := message.get("content"):
-                        self.final_content += content
-                        self.stream_handler.new_token(content)
+                        formatted_content = format_content(content)
+                        self.final_content += formatted_content
+                        self.stream_handler.new_token(formatted_content)
 
         # Handle end of stream
         if self.final_content:
